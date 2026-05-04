@@ -1,0 +1,58 @@
+# Non-secret configuration. API keys live in .env, never here.
+# Path values are relative to the repo root.
+
+paths:
+  duckdb: "data/trendscope.duckdb"
+  digests: "digests/"
+  universe_yaml: "config/universe.yaml"
+
+ingest:
+  default_start: "2020-01-01"
+  yfinance:
+    interval: "1d"
+    auto_adjust: false   # we keep raw OHLC and adj_close as separate columns
+    actions: true        # include splits / dividends columns
+    timeout_seconds: 30
+  retries:
+    max_attempts: 3
+    backoff_seconds: 2
+
+# Phase 2 signal parameters. Each block is consumed by the corresponding
+# module under src/trendscope/signals/.
+signals:
+  trend:
+    fast_ma: 50
+    slow_ma: 200
+    adx_period: 14
+  momentum:
+    horizons_days: [5, 21, 63, 252]
+  meanrev:
+    rsi_period: 14
+    zscore_lookback: 20
+  volatility:
+    realized_window: 20
+    percentile_lookback: 252
+  volume:
+    avg_window: 20
+    spike_multiplier: 2.0
+  breadth:
+    above_ma_window: 50
+
+# Phase 3 digest parameters.
+digest:
+  filters:
+    min_signal_strength: 1.5     # in z-score / percentile terms
+    max_tickers_per_digest: 15
+  llm:
+    model: "claude-sonnet-4-6"
+    max_tokens: 4096
+    temperature: 0.4
+  news:
+    headlines_per_ticker: 5
+
+logging:
+  level: "INFO"
+  format: "console"   # "console" for dev, "json" for prod / CI
+
+display:
+  timezone: "America/New_York"   # storage is UTC; display flips to ET

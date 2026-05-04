@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# uv / virtualenv
+.venv/
+.uv-cache/
+
+# Test/type/lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Project data (DuckDB lives here, never committed)
+data/
+digests/
+*.duckdb
+*.duckdb.wal
+
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Build artifacts
+build/
+dist/
+*.egg-info/

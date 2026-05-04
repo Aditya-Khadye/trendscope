@@ -1,0 +1,43 @@
+# Trendscope universe — tickers grouped by purpose.
+# Edit freely. Changes take effect on the next ingest run; existing rows
+# in the prices table are unaffected.
+
+groups:
+  mega_cap:
+    description: "Largest US equities by market cap"
+    tickers:
+      - AAPL
+      - MSFT
+      - NVDA
+      - GOOGL
+      - AMZN
+      - META
+      - TSLA
+
+  indices_etfs:
+    description: "Broad market and sector ETFs (also serve as benchmarks)"
+    tickers:
+      - SPY    # S&P 500
+      - QQQ    # Nasdaq 100
+      - IWM    # Russell 2000
+      - XLF    # Financials
+      - XLK    # Technology
+      - XLE    # Energy
+      - XLV    # Health Care
+      - XLY    # Consumer Discretionary
+
+  holdings:
+    description: "Personal positions — placeholder, replace with actual holdings"
+    tickers:
+      - TSLA
+
+# Map each ticker to the sector ETF it should be benchmarked against for
+# relative-strength signals. Tickers absent from this map fall back to SPY.
+sector_etf_map:
+  AAPL: XLK
+  MSFT: XLK
+  NVDA: XLK
+  GOOGL: XLK
+  AMZN: XLY
+  META: XLK
+  TSLA: XLY
