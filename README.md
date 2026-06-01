@@ -1,5 +1,11 @@
 # trendscope
 
+[![CI](https://github.com/Aditya-Khadye/trendscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Aditya-Khadye/trendscope/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![mypy: strict](https://img.shields.io/badge/mypy-strict-blue)](https://mypy.readthedocs.io/)
+[![ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 Personal market-trend detection. Surfaces what's changing across a configurable
 universe of tickers each day so I can make my own calls. **Descriptive analytics
 only — no prediction, no autonomous trading, no alpha claims.** The LLM layer
@@ -21,6 +27,24 @@ brew install uv         # one time
 uv sync                 # creates .venv, installs deps
 cp .env.example .env    # add ANTHROPIC_API_KEY
 ```
+
+### Private holdings (optional)
+
+To track real positions without committing them, create
+`config/universe.local.yaml` (gitignored). It overlays `universe.yaml`:
+
+```yaml
+# config/universe.local.yaml — never committed
+groups:
+  holdings:
+    description: "Real positions"
+    tickers: [AAPL, NVDA, ...]   # replaces the placeholder holdings group
+
+sector_etf_map:
+  COIN: XLF                       # adds/overrides individual mappings
+```
+
+`Universe.from_yaml()` automatically merges this on top of the base file.
 
 ## Daily flow
 
