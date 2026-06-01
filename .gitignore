@@ -17,9 +17,10 @@ __pycache__/
 htmlcov/
 coverage.xml
 
-# Project data (DuckDB lives here, never committed)
-data/
-digests/
+# Project data (DuckDB lives here, never committed).
+# Leading slash anchors to repo root so we don't shadow src/trendscope/data/.
+/data/
+/digests/
 *.duckdb
 *.duckdb.wal
 
