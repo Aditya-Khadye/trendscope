@@ -9,6 +9,8 @@ license = { text = "MIT" }
 
 dependencies = [
     "anthropic>=0.40.0",
+    "dbt-core>=1.9,<2.0",
+    "dbt-duckdb>=1.9,<2.0",
     "duckdb>=1.0.0",
     "numpy>=1.26",
     "pandas>=2.2",
@@ -58,7 +60,7 @@ no_implicit_reexport = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["yfinance.*", "pandas_ta.*"]
+module = ["yfinance.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

@@ -99,8 +99,9 @@ def migrate_legacy_cmd() -> None:
 
 @app.command()
 def signals() -> None:
-    """Compute signal marts. (Phase 2: becomes `dbt build`.)"""
-    raise NotImplementedError("signals is Phase 2 — will be owned by dbt")
+    """Signal computation is owned by dbt — run `make signals` (dbt build)."""
+    typer.echo("Signals are computed by dbt. Run: make signals  (or: cd dbt && dbt build)")
+    raise typer.Exit(code=2)
 
 
 @app.command()

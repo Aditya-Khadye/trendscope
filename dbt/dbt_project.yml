@@ -1,0 +1,67 @@
+name: "trendscope"
+version: "1.0.0"
+config-version: 2
+
+profile: "trendscope"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets: ["target", "dbt_packages"]
+require-dbt-version: [">=1.9.0", "<2.0.0"]
+
+# All signal parameters live here (not in Python) so any threshold change is
+# a transform-layer change: visible in git, applied by the next `dbt build`.
+vars:
+  # Incremental models reprocess this many trailing days so late upstream
+  # restatements heal on the next run.
+  lookback_days: 7
+  # Trend
+  fast_ma_window: 50
+  slow_ma_window: 200
+  # Momentum (multi-horizon returns + cross-sectional ranks)
+  momentum_horizons: [5, 21, 63, 252]
+  # Mean reversion
+  rsi_period: 14
+  zscore_lookback: 20
+  # Volatility
+  realized_vol_window: 20
+  vol_percentile_lookback: 252
+  # Volume
+  volume_avg_window: 20
+  volume_spike_multiplier: 2.0
+  # Data-quality: max tolerated calendar-day gap between consecutive bars
+  # (US markets never close for more than 4 consecutive days).
+  max_calendar_gap_days: 5
+
+models:
+  trendscope:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+
+snapshots:
+  trendscope:
+    +schema: snapshots
+
+seeds:
+  trendscope:
+    +schema: seeds
+    ci_fixtures:
+      # CI-only fixtures that stand in for the raw tables so `dbt build`
+      # never needs yfinance. Never enabled outside the ci target.
+      +enabled: "{{ target.name == 'ci' }}"
+      +schema: raw
+      raw_prices_sample:
+        +alias: prices
+      raw_tickers_sample:
+        +alias: tickers

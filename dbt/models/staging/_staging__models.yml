@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: stg_prices
+    description: >
+      Clean, deduplicated daily prices: latest version per (date, ticker),
+      NaN-close rows dropped, split ratio normalized to a valid multiplier,
+      dividends defaulted to 0. One row per ticker per trading day.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date, ticker]
+    columns:
+      - name: date
+        description: Trading date.
+        tests: [not_null]
+      - name: ticker
+        description: Ticker symbol.
+        tests: [not_null]
+      - name: close
+        description: Unadjusted close price.
+        tests: [not_null]
+      - name: adj_close
+        description: Split- and dividend-adjusted close (basis for all return math).
+        tests: [not_null]
+      - name: volume
+        description: Shares traded. Nullable (rare upstream gaps), never negative.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: split_ratio
+        description: Split multiplier; 1.0 means no split (yfinance's 0.0 remapped).
+
+  - name: stg_tickers
+    description: Current instrument metadata — newest version per ticker.
+    columns:
+      - name: ticker
+        description: Ticker symbol (primary key).
+        tests: [unique, not_null]
+      - name: asset_type
+        description: Instrument class derived from yfinance quoteType.

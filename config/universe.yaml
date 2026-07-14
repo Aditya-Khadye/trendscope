@@ -31,13 +31,6 @@ groups:
     tickers:
       - TSLA
 
-# Map each ticker to the sector ETF it should be benchmarked against for
-# relative-strength signals. Tickers absent from this map fall back to SPY.
-sector_etf_map:
-  AAPL: XLK
-  MSFT: XLK
-  NVDA: XLK
-  GOOGL: XLK
-  AMZN: XLY
-  META: XLK
-  TSLA: XLY
+# Benchmark (sector-ETF) mapping moved to dbt/seeds/sector_etf_map.csv —
+# the transform layer is its source of truth so it participates in SQL
+# joins, tests, and lineage. Tickers absent from the seed fall back to SPY.

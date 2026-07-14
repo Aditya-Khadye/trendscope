@@ -1,0 +1,95 @@
+version: 2
+
+models:
+  - name: int_returns_multi_horizon
+    description: >
+      Simple returns over 1d plus the configured momentum horizons, and
+      per-date cross-sectional percentile ranks per horizon (nulls excluded
+      before ranking). All lookbacks are strict — no partial-history values.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date, ticker]
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: ticker
+        tests: [not_null]
+      - name: momentum_rank_21d
+        description: Percentile rank (0-1) of 21d return across tickers that day.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: int_moving_averages
+    description: >
+      50/200-day simple moving averages (NULL until the full window exists)
+      with above-MA state and golden/death cross-day flags.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date, ticker]
+    columns:
+      - name: ma_fast
+        description: "Fast SMA (window: var fast_ma_window, default 50)."
+      - name: ma_slow
+        description: "Slow SMA (window: var slow_ma_window, default 200)."
+      - name: golden_cross
+        description: True only on the day ma_fast crosses above ma_slow.
+
+  - name: int_rsi_zscore
+    description: >
+      Cutler's RSI (simple-average variant of RSI — Wilder's recursive
+      smoothing doesn't fit window SQL) and trailing z-score of adj_close.
+    columns:
+      - name: rsi
+        description: Cutler's RSI, 0-100.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+      - name: zscore
+        description: adj_close z-score vs its trailing window.
+
+  - name: int_realized_volatility
+    description: >
+      Annualized realized volatility of daily log returns and its strict
+      trailing percentile within the ticker's own history.
+    columns:
+      - name: realized_vol
+        description: Annualized stddev of log returns over the realized window.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: vol_percentile
+        description: Trailing percentile (0-1) of realized_vol.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: int_volume_stats
+    description: >
+      Volume vs the prior-window average (current day excluded from its own
+      baseline) with a configurable spike flag.
+    columns:
+      - name: volume_ratio
+        description: volume / prior-window average volume.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: int_relative_strength
+    description: >
+      Ticker return minus benchmark sector-ETF return (21d / 63d).
+      Benchmark from the sector_etf_map seed, SPY fallback.
+    columns:
+      - name: benchmark
+        description: Benchmark ETF used for the comparison.
+        tests: [not_null]

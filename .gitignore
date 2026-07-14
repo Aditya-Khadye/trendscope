@@ -43,3 +43,8 @@ coverage.xml
 build/
 dist/
 *.egg-info/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/

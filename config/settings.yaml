@@ -17,26 +17,8 @@ ingest:
     max_attempts: 3
     backoff_seconds: 2
 
-# Phase 2 signal parameters. Each block is consumed by the corresponding
-# module under src/trendscope/signals/.
-signals:
-  trend:
-    fast_ma: 50
-    slow_ma: 200
-    adx_period: 14
-  momentum:
-    horizons_days: [5, 21, 63, 252]
-  meanrev:
-    rsi_period: 14
-    zscore_lookback: 20
-  volatility:
-    realized_window: 20
-    percentile_lookback: 252
-  volume:
-    avg_window: 20
-    spike_multiplier: 2.0
-  breadth:
-    above_ma_window: 50
+# Signal parameters live in dbt/dbt_project.yml `vars` — dbt owns all
+# transformations. This file configures only the Python EL + digest layers.
 
 # Phase 3 digest parameters.
 digest:

@@ -1,10 +1,11 @@
-.PHONY: help install ingest signals digest daily test typecheck lint format check clean
+.PHONY: help install ingest signals dbt-docs digest daily test typecheck lint format check clean
 
 help:
 	@echo "Targets:"
-	@echo "  install     uv sync (creates .venv, installs deps)"
-	@echo "  ingest      pull latest prices into DuckDB"
-	@echo "  signals     compute signals table          (Phase 2)"
+	@echo "  install     uv sync + dbt deps"
+	@echo "  ingest      pull latest prices into DuckDB (raw schema)"
+	@echo "  signals     dbt build: staging -> intermediate -> marts + tests"
+	@echo "  dbt-docs    dbt docs generate (lineage in dbt/target/)"
 	@echo "  digest      LLM-narrated markdown digest   (Phase 3)"
 	@echo "  daily       ingest + signals + digest"
 	@echo "  test        run pytest"
@@ -16,12 +17,16 @@ help:
 
 install:
 	uv sync
+	cd dbt && uv run dbt deps
 
 ingest:
 	uv run trendscope ingest --daily
 
 signals:
-	uv run trendscope signals
+	cd dbt && uv run dbt build
+
+dbt-docs:
+	cd dbt && uv run dbt docs generate
 
 digest:
 	uv run trendscope digest
@@ -45,5 +50,6 @@ check: lint typecheck test
 
 clean:
 	rm -rf .venv .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov build dist
+	rm -rf dbt/target dbt/dbt_packages dbt/logs
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true

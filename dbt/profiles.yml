@@ -1,0 +1,15 @@
+# Committed on purpose: no secrets here, and a stranger cloning the repo
+# should get a working dbt setup with zero manual profile wiring.
+# dbt discovers this file when invoked from the dbt/ directory.
+trendscope:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # Relative to the dbt/ working directory; override for Airflow/containers.
+      path: "{{ env_var('TRENDSCOPE_DUCKDB_PATH', '../data/trendscope.duckdb') }}"
+      threads: 4
+    ci:
+      type: duckdb
+      path: "ci.duckdb"
+      threads: 4

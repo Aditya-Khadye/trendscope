@@ -1,0 +1,46 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Append-only landing zone written by trendscope's Python extract/load
+      (`trendscope ingest`). No UPDATEs or DELETEs ever happen here; changed
+      upstream data appends new versions distinguished by `_loaded_at`.
+    schema: raw
+    tables:
+      - name: prices
+        description: >
+          Versioned daily OHLCV bars, one row per (date, ticker, _source,
+          _loaded_at). Preserves upstream quirks verbatim: NaN rows at series
+          edges and yfinance's `0.0 = no split` convention. The latest
+          `_loaded_at` per (date, ticker) is the current view; older versions
+          preserve point-in-time history (e.g. adj_close before a dividend
+          restatement).
+        loaded_at_field: _loaded_at
+        freshness:
+          warn_after: {count: 24, period: hour}
+          error_after: {count: 72, period: hour}  # tolerate weekends
+        columns:
+          - name: date
+            description: Trading date (exchange local calendar date).
+          - name: ticker
+            description: Upstream ticker symbol.
+          - name: adj_close
+            description: Split- and dividend-adjusted close as known at load time.
+          - name: _source
+            description: Provenance ('yfinance' today; 'polygon' later).
+          - name: _loaded_at
+            description: UTC load timestamp set by the Python loader.
+      - name: tickers
+        description: >
+          Versioned instrument metadata. A new version is appended only when
+          content changes (first sighting, universe group/benchmark edits).
+        loaded_at_field: _loaded_at
+        freshness: null  # metadata changes rarely; freshness on prices suffices
+        columns:
+          - name: ticker
+            description: Ticker symbol (natural key across versions).
+          - name: groups
+            description: Universe group memberships from config/universe.yaml.
+      - name: load_log
+        description: Audit log for Python EL runs (mode, status, row counts).

@@ -58,44 +58,6 @@ class IngestSettings(BaseModel):
     retries: IngestRetriesSettings = Field(default_factory=IngestRetriesSettings)
 
 
-class TrendSignalSettings(BaseModel):
-    fast_ma: int = 50
-    slow_ma: int = 200
-    adx_period: int = 14
-
-
-class MomentumSignalSettings(BaseModel):
-    horizons_days: list[int] = Field(default_factory=lambda: [5, 21, 63, 252])
-
-
-class MeanRevSignalSettings(BaseModel):
-    rsi_period: int = 14
-    zscore_lookback: int = 20
-
-
-class VolatilitySignalSettings(BaseModel):
-    realized_window: int = 20
-    percentile_lookback: int = 252
-
-
-class VolumeSignalSettings(BaseModel):
-    avg_window: int = 20
-    spike_multiplier: float = 2.0
-
-
-class BreadthSignalSettings(BaseModel):
-    above_ma_window: int = 50
-
-
-class SignalsSettings(BaseModel):
-    trend: TrendSignalSettings = Field(default_factory=TrendSignalSettings)
-    momentum: MomentumSignalSettings = Field(default_factory=MomentumSignalSettings)
-    meanrev: MeanRevSignalSettings = Field(default_factory=MeanRevSignalSettings)
-    volatility: VolatilitySignalSettings = Field(default_factory=VolatilitySignalSettings)
-    volume: VolumeSignalSettings = Field(default_factory=VolumeSignalSettings)
-    breadth: BreadthSignalSettings = Field(default_factory=BreadthSignalSettings)
-
-
 class DigestFiltersSettings(BaseModel):
     min_signal_strength: float = 1.5
     max_tickers_per_digest: int = 15
@@ -142,7 +104,6 @@ class Settings(BaseSettings):
 
     paths: PathsSettings
     ingest: IngestSettings = Field(default_factory=IngestSettings)
-    signals: SignalsSettings = Field(default_factory=SignalsSettings)
     digest: DigestSettings = Field(default_factory=DigestSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     display: DisplaySettings = Field(default_factory=DisplaySettings)

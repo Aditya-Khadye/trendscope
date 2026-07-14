@@ -1,0 +1,53 @@
+version: 2
+
+seeds:
+  - name: sector_etf_map
+    description: >
+      Source of truth for which sector ETF each ticker is benchmarked
+      against in relative-strength signals. Tickers absent here fall back
+      to SPY. Lives in the transform layer (not universe.yaml) so it joins,
+      tests, and appears in lineage like any other relation.
+    columns:
+      - name: ticker
+        description: Ticker being benchmarked.
+        tests: [unique, not_null]
+      - name: benchmark
+        description: Sector ETF to compare against.
+        tests: [not_null]
+
+  - name: raw_prices_sample
+    description: >
+      CI-only synthetic stand-in for raw.prices (enabled only when target
+      is 'ci'; aliased to raw.prices). Continuous business days, no real
+      market data, includes a deliberate volume spike and yfinance's
+      0.0-split convention so staging logic is exercised.
+    config:
+      column_types:
+        date: date
+        ticker: varchar
+        open: double
+        high: double
+        low: double
+        close: double
+        adj_close: double
+        volume: bigint
+        dividend: double
+        split_ratio: double
+        _source: varchar
+        _loaded_at: timestamp
+
+  - name: raw_tickers_sample
+    description: >
+      CI-only synthetic stand-in for raw.tickers (enabled only when target
+      is 'ci'; aliased to raw.tickers).
+    config:
+      column_types:
+        ticker: varchar
+        name: varchar
+        sector: varchar
+        industry: varchar
+        asset_type: varchar
+        groups: varchar
+        benchmark: varchar
+        _source: varchar
+        _loaded_at: timestamp

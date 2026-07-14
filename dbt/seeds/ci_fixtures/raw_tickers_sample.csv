@@ -1,0 +1,4 @@
+ticker,name,sector,industry,asset_type,groups,benchmark,_source,_loaded_at
+AAPL,Apple Inc. (sample),Technology,Consumer Electronics,stock,sample_group,SPY,sample,2024-03-28 00:00:00
+XLK,Tech Select SPDR (sample),,,etf,sample_group,SPY,sample,2024-03-28 00:00:00
+SPY,SPDR S&P 500 (sample),,,etf,sample_group,SPY,sample,2024-03-28 00:00:00

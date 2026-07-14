@@ -1,0 +1,131 @@
+version: 2
+
+models:
+  - name: dim_tickers
+    description: >
+      Current instrument dimension (live rows of the SCD2 tickers snapshot)
+      with the benchmark ETF from the sector_etf_map seed (SPY fallback).
+    columns:
+      - name: ticker
+        description: Ticker symbol (primary key).
+        tests: [unique, not_null]
+      - name: asset_type
+        description: Instrument class.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['stock', 'etf', 'index', 'mutualfund', 'unknown']
+      - name: benchmark
+        description: Benchmark ETF; must itself be a tracked ticker.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_tickers')
+                field: ticker
+
+  - name: fct_daily_prices
+    description: >
+      Clean daily OHLCV fact, one row per (date, ticker). Incremental with a
+      trailing reprocess window (var lookback_days) so upstream restatements
+      heal automatically.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date, ticker]
+    columns:
+      - name: date
+        tests: [not_null]
+      - name: ticker
+        description: Ticker symbol.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_tickers')
+                field: ticker
+      - name: adj_close
+        description: Adjusted close as currently known.
+        tests: [not_null]
+
+  - name: fct_returns
+    description: >
+      Wide return fact: multi-horizon returns, cross-sectional momentum
+      percentile ranks, and relative strength vs the benchmark ETF.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date, ticker]
+    columns:
+      - name: ticker
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_tickers')
+                field: ticker
+      - name: return_21d
+        description: 21-trading-day simple return on adj_close.
+      - name: relative_return_21d
+        description: return_21d minus the benchmark ETF's return_21d.
+
+  - name: fct_daily_signals
+    description: >
+      Long-form signal fact — (date, ticker, signal_name, value). Successor
+      of the v1 Python signals-table contract. Booleans are 0/1; rows with
+      NULL values are omitted (insufficient history).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [date, ticker, signal_name]
+    columns:
+      - name: ticker
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_tickers')
+                field: ticker
+      - name: signal_name
+        description: Which signal this row carries.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - return_5d
+                  - return_21d
+                  - return_63d
+                  - return_252d
+                  - momentum_rank_5d
+                  - momentum_rank_21d
+                  - momentum_rank_63d
+                  - momentum_rank_252d
+                  - above_slow_ma
+                  - golden_cross
+                  - death_cross
+                  - rsi
+                  - zscore
+                  - realized_vol
+                  - vol_percentile
+                  - volume_ratio
+                  - volume_spike
+                  - relative_return_21d
+                  - relative_return_63d
+      - name: value
+        description: Numeric signal value (booleans as 0/1).
+        tests: [not_null]
+
+  - name: fct_market_breadth
+    description: >
+      Universe-level daily breadth: % of tickers above the slow MA, % with
+      positive 21d momentum, % with a volume spike. NULL-history tickers are
+      excluded per-metric.
+    columns:
+      - name: date
+        tests: [unique, not_null]
+      - name: pct_above_slow_ma
+        description: Share (0-1) of tickers trading above their slow MA.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
