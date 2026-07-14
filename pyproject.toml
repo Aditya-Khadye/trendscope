@@ -3,7 +3,7 @@ name = "trendscope"
 version = "0.1.0"
 description = "Personal market-trend detection: descriptive analytics over a configurable universe of tickers."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "Aditya Khadye" }]
 license = { text = "MIT" }
 
@@ -49,7 +49,7 @@ build-backend = "hatchling.build"
 packages = ["src/trendscope"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
@@ -63,7 +63,7 @@ ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
