@@ -49,3 +49,10 @@ dbt/target/
 dbt/dbt_packages/
 dbt/logs/
 dbt/.user.yml
+
+# Airflow / Astro local runtime artifacts
+include/data/
+include/digests/
+airflow.db
+airflow.cfg
+webserver_config.py

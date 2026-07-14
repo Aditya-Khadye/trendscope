@@ -1,0 +1,4 @@
+# Airflow-image-only dependencies (see Dockerfile). The trendscope package
+# and its dependencies (dbt, yfinance, anthropic, ...) install from
+# pyproject.toml; local dev uses uv + uv.lock, not this file.
+astronomer-cosmos>=1.10,<2

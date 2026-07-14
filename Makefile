@@ -1,4 +1,4 @@
-.PHONY: help install ingest signals dbt-docs digest daily test typecheck lint format check clean
+.PHONY: help install ingest signals dbt-docs digest daily test typecheck lint format check clean airflow-start airflow-stop airflow-test
 
 help:
 	@echo "Targets:"
@@ -32,6 +32,15 @@ digest:
 	uv run trendscope digest
 
 daily: ingest signals digest
+
+airflow-start:
+	astro dev start --no-browser
+
+airflow-stop:
+	astro dev stop
+
+airflow-test:
+	astro dev run dags test trendscope_daily
 
 test:
 	uv run pytest

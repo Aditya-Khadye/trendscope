@@ -1,0 +1,36 @@
+.git
+.astro
+.env
+airflow_settings.yaml
+logs/
+airflow.db
+airflow.cfg
+
+# Local environments and caches — never belong in the image
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+
+# Data and generated artifacts — provided by the include/ mount at runtime
+data/
+digests/
+include/data/
+include/digests/
+*.duckdb
+*.duckdb.wal
+
+# dbt local artifacts (dbt deps runs inside the image build)
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/ci.duckdb
+
+# Not needed in the image
+tests/
+.github/
+.claude/
+Makefile
+MIGRATION_PLAN.md
+uv.lock

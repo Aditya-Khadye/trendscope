@@ -49,17 +49,40 @@ sector_etf_map:
 ## Daily flow
 
 ```bash
-trendscope ingest --daily   # pull latest prices into DuckDB
-trendscope signals          # Phase 2: compute signal table
-trendscope digest           # Phase 3: LLM-narrated markdown
-make daily                  # all of the above
+make ingest    # yfinance -> DuckDB raw schema (idempotent)
+make signals   # dbt build: staging -> marts + 44 tests
+make digest    # markdown digest (LLM narrative if ANTHROPIC_API_KEY set)
+make daily     # all of the above
 ```
 
 Backfill from a specific date:
 
 ```bash
-trendscope ingest --since 2020-01-01
+uv run trendscope ingest --since 2020-01-01
 ```
+
+## Airflow (local, via Astro CLI)
+
+The same pipeline runs as an Airflow 3 DAG (`trendscope_daily`) with each
+dbt model and test as an individual task via astronomer-cosmos.
+
+```bash
+brew install astro           # one time; Docker Desktop must be running
+astro dev start              # build image + start Airflow at http://localhost:8080
+astro dev run dags test trendscope_daily   # run the whole DAG once, in-process
+astro dev stop               # shut the stack down
+```
+
+Notes:
+
+- The container's DuckDB lives at `include/data/trendscope.duckdb` (host-
+  mounted, gitignored). The first run bootstraps a full backfill.
+- Digests land in `include/digests/` on the host.
+- Add `ANTHROPIC_API_KEY` to `.env` (see `.env.example`) and restart to
+  enable the LLM narrative; without it the digest still renders,
+  deterministically, with a note.
+- Schedule: 18:00 America/New_York weekdays, `catchup=False`, retries with
+  exponential backoff, all tasks serialized (DuckDB is single-writer).
 
 ## Repo layout
 
