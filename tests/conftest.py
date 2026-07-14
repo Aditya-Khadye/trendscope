@@ -1,7 +1,7 @@
 """Shared pytest fixtures."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -25,8 +25,8 @@ def project_root() -> Path:
 
 
 @pytest.fixture
-def db_conn(tmp_path: Path) -> duckdb.DuckDBPyConnection:
-    """A fresh DuckDB with the schema applied, backed by a tmp file."""
+def db_conn(tmp_path: Path) -> Iterator[duckdb.DuckDBPyConnection]:
+    """A fresh DuckDB with the raw schema applied, backed by a tmp file."""
     conn = duckdb.connect(str(tmp_path / "test.duckdb"))
     ingest.apply_schema(conn)
     yield conn
@@ -79,8 +79,10 @@ class FakeFetcher:
     """Test double for YFinanceFetcher.
 
     history: callable taking (ticker, start, end) and returning a yfinance-shaped
-    DataFrame. Raise an exception inside the callable to simulate failure.
+    DataFrame. Raise inside the callable to simulate failure.
     info: optional callable taking ticker and returning a metadata dict.
+    Records every fetch_history call in `calls` and every fetch_info call in
+    `info_calls`.
     """
 
     def __init__(
@@ -91,6 +93,7 @@ class FakeFetcher:
         self._history = history
         self._info = info or (lambda _t: {})
         self.calls: list[tuple[str, date, date]] = []
+        self.info_calls: list[str] = []
 
     def fetch_history(
         self, ticker: str, start: date, end: date, settings: IngestSettings
@@ -99,6 +102,7 @@ class FakeFetcher:
         return self._history(ticker, start, end)
 
     def fetch_info(self, ticker: str) -> dict[str, Any]:
+        self.info_calls.append(ticker)
         return self._info(ticker)
 
 

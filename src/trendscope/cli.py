@@ -35,10 +35,10 @@ def ingest_cmd(
     daily: bool = typer.Option(
         False,
         "--daily",
-        help="Idempotent incremental ingest from the latest stored date per ticker.",
+        help="Incremental load from the latest loaded date per ticker.",
     ),
 ) -> None:
-    """Pull price data into DuckDB."""
+    """Extract prices from yfinance and load into the raw DuckDB schema."""
     _bootstrap_logging()
 
     if (since is None) == (not daily):
@@ -63,22 +63,44 @@ def ingest_cmd(
         conn.close()
 
     typer.echo(
-        f"[{summary['status']}] "
+        f"[{summary['status']}] mode={summary['mode']} "
         f"processed={summary['tickers_processed']} "
         f"skipped={summary['tickers_skipped']} "
         f"failed={summary['tickers_failed']} "
-        f"rows={summary['rows_written']} "
-        f"run_id={summary['run_id']}"
+        f"appended={summary['rows_appended']} "
+        f"unchanged={summary['rows_unchanged']} "
+        f"load_id={summary['load_id']}"
     )
 
     if summary["status"] == "partial":
         raise typer.Exit(code=1)
 
 
+@app.command("migrate-legacy")
+def migrate_legacy_cmd() -> None:
+    """One-time migration of the pre-ELT schema into raw. No-op on fresh databases."""
+    _bootstrap_logging()
+    settings = get_settings()
+    conn = ingest.connect(settings.paths.duckdb)
+    try:
+        summary = ingest.migrate_legacy(conn)
+    finally:
+        conn.close()
+
+    if summary["status"] == "no_legacy":
+        typer.echo("No legacy tables found — nothing to migrate.")
+    else:
+        typer.echo(
+            f"[{summary['status']}] prices={summary['prices_migrated']} "
+            f"tickers={summary['tickers_migrated']} "
+            f"dropped={','.join(summary['legacy_tables_dropped'])}"
+        )
+
+
 @app.command()
 def signals() -> None:
-    """Compute the signals table from prices. (Phase 2.)"""
-    raise NotImplementedError("signals is Phase 2")
+    """Compute signal marts. (Phase 2: becomes `dbt build`.)"""
+    raise NotImplementedError("signals is Phase 2 — will be owned by dbt")
 
 
 @app.command()
@@ -90,7 +112,7 @@ def digest() -> None:
 @app.command()
 def daily() -> None:
     """Run ingest + signals + digest end-to-end."""
-    raise NotImplementedError("daily wires up once ingest, signals, and digest exist")
+    raise NotImplementedError("daily wires up once signals and digest exist")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,15 @@
-"""yfinance -> DuckDB ingest. Idempotent per-ticker upsert."""
+"""yfinance -> DuckDB extract/load. Append-only raw layer.
+
+Raw tables are append-only: no UPDATE, no DELETE. Every row carries
+`_source` and `_loaded_at` (UTC). Idempotency is content-aware: re-loading
+identical data is a no-op; genuinely changed bars append a *new version*
+of the row. Downstream dbt staging resolves latest-wins per (date, ticker).
+
+Point-in-time note: upstream restates `adj_close` for the entire history
+whenever a dividend or split occurs, so a full-range backfill after such an
+event legitimately appends new versions of old rows. That is by design —
+the raw layer preserves what was known when.
+"""
 from __future__ import annotations
 
 import json
@@ -19,7 +30,7 @@ from trendscope.universe import Universe
 
 logger = structlog.get_logger(__name__)
 
-# Order matches the prices table (excluding data_source, ingested_at which we set in SQL).
+# Canonical column layout for raw.prices (metadata columns excluded).
 PRICE_COLUMNS: tuple[str, ...] = (
     "date",
     "ticker",
@@ -33,14 +44,26 @@ PRICE_COLUMNS: tuple[str, ...] = (
     "split_ratio",
 )
 
-DEFAULT_DATA_SOURCE = "yfinance"
+# Value columns compared when deciding whether an incoming row is a new version.
+_CONTENT_COLUMNS: tuple[str, ...] = tuple(
+    c for c in PRICE_COLUMNS if c not in {"date", "ticker"}
+)
+
+DEFAULT_SOURCE = "yfinance"
+
+LEGACY_TABLES: tuple[str, ...] = ("prices", "tickers", "signals", "runs")
+
+
+def _utcnow() -> datetime:
+    """Naive UTC timestamp for storage (project rule: UTC in storage)."""
+    return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
 # ---------------------------------------------------------------------------
 # Fetcher abstraction — Protocol so tests can substitute a fake.
 # ---------------------------------------------------------------------------
 class YFinanceFetcher(Protocol):
-    """The slice of yfinance that ingest depends on."""
+    """The slice of yfinance that the loader depends on."""
 
     def fetch_history(
         self, ticker: str, start: date, end: date, settings: IngestSettings
@@ -96,13 +119,18 @@ def apply_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Normalization — yfinance DataFrame -> long-form prices rows.
+# Normalization — yfinance frame -> canonical raw layout.
+#
+# Only *structural* concerns live here (pandas shape, column names, dtypes).
+# Semantic cleaning (NaN rows, the 0.0-split convention) is deliberately NOT
+# done: raw preserves upstream as-is and dbt staging cleans.
 # ---------------------------------------------------------------------------
 def normalize_history(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
-    """Convert a yfinance OHLCV frame into the prices-table column layout.
+    """Convert a yfinance OHLCV frame into the raw.prices column layout.
 
-    Handles: MultiIndex columns (recent yfinance behavior), missing actions,
-    yfinance's "0.0 means no split" convention, and the index date column.
+    Handles MultiIndex columns (recent yfinance), missing action columns
+    (kept as NULL, not fabricated), the datetime index, and nullable volume.
+    Rows with NaN values are KEPT — raw is a faithful record.
     """
     if df.empty:
         return pd.DataFrame(columns=list(PRICE_COLUMNS))
@@ -124,13 +152,9 @@ def normalize_history(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     }
     df = df.rename(columns=rename_map)
 
-    if "dividend" not in df.columns:
-        df["dividend"] = 0.0
-    if "split_ratio" not in df.columns:
-        df["split_ratio"] = 1.0
-    # yfinance reports 0.0 when no split occurred; we store 1.0 so split_ratio
-    # is always a valid multiplier.
-    df["split_ratio"] = df["split_ratio"].where(df["split_ratio"] != 0.0, 1.0)
+    for col in ("dividend", "split_ratio"):
+        if col not in df.columns:
+            df[col] = pd.NA
 
     df = df.reset_index()
     date_col = next((c for c in ("Date", "Datetime", "index") if c in df.columns), None)
@@ -139,87 +163,128 @@ def normalize_history(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     df["date"] = pd.to_datetime(df[date_col]).dt.date
     df["ticker"] = ticker
 
-    # Drop rows where critical fields are NaN (occasionally happens at series edges).
-    df = df.dropna(subset=["open", "high", "low", "close", "adj_close", "volume"])
+    # Volume must survive NaN -> NULL round-trips into BIGINT.
+    df["volume"] = df["volume"].astype("Int64")
 
     return df[list(PRICE_COLUMNS)].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
-# Upsert helpers.
+# Append helpers.
 # ---------------------------------------------------------------------------
-def upsert_prices(
+def append_prices(
     conn: duckdb.DuckDBPyConnection,
     df: pd.DataFrame,
-    data_source: str = DEFAULT_DATA_SOURCE,
-) -> int:
-    """Insert or replace rows in `prices`. Returns the number of rows written."""
-    if df.empty:
-        return 0
+    *,
+    source: str = DEFAULT_SOURCE,
+    loaded_at: datetime | None = None,
+) -> tuple[int, int]:
+    """Append new/changed rows to raw.prices. Returns (appended, unchanged).
 
-    # Register under a unique name so concurrent calls in tests don't collide.
+    A row is appended when its (date, ticker) has no version for `source`
+    yet, or when any value column differs from the LATEST version (compared
+    with IS DISTINCT FROM, so NULLs compare sanely). Identical rows are
+    skipped — re-running the same load is a no-op.
+    """
+    if df.empty:
+        return (0, 0)
+    loaded_at = loaded_at or _utcnow()
+
     staging = f"_stg_prices_{uuid.uuid4().hex}"
     conn.register(staging, df)
     try:
         col_list = ", ".join(PRICE_COLUMNS)
-        update_set = ",\n            ".join(
-            f"{c} = EXCLUDED.{c}" for c in PRICE_COLUMNS if c not in {"date", "ticker"}
+        diff_clause = " OR ".join(
+            f"s.{c} IS DISTINCT FROM l.{c}" for c in _CONTENT_COLUMNS
         )
-        # NB: use now() rather than bare CURRENT_TIMESTAMP — DuckDB's ON CONFLICT
-        # parser treats the latter as an identifier, not the time function.
-        conn.execute(
+        inserted = conn.execute(
             f"""
-            INSERT INTO prices ({col_list}, data_source, ingested_at)
-            SELECT {col_list}, ?, now() FROM {staging}
-            ON CONFLICT (date, ticker) DO UPDATE SET
-                {update_set},
-                data_source = EXCLUDED.data_source,
-                ingested_at = now()
+            INSERT INTO raw.prices ({col_list}, _source, _loaded_at)
+            WITH latest AS (
+                SELECT *
+                FROM (
+                    SELECT *,
+                           row_number() OVER (
+                               PARTITION BY date, ticker
+                               ORDER BY _loaded_at DESC
+                           ) AS rn
+                    FROM raw.prices
+                    WHERE _source = ?
+                )
+                WHERE rn = 1
+            )
+            SELECT {", ".join(f"s.{c}" for c in PRICE_COLUMNS)}, ?, ?
+            FROM {staging} s
+            LEFT JOIN latest l ON l.date = s.date AND l.ticker = s.ticker
+            WHERE l.date IS NULL OR ({diff_clause})
+            RETURNING 1
             """,
-            [data_source],
-        )
+            [source, source, loaded_at],
+        ).fetchall()
     finally:
         conn.unregister(staging)
-    return len(df)
+
+    appended = len(inserted)
+    return (appended, len(df) - appended)
 
 
-def ensure_ticker_metadata(
+def sync_ticker_metadata(
     conn: duckdb.DuckDBPyConnection,
     ticker: str,
     universe: Universe,
     fetcher: YFinanceFetcher,
-) -> None:
-    """Insert tickers row on first encounter; refresh groups/benchmark every run."""
+    *,
+    source: str = DEFAULT_SOURCE,
+    loaded_at: datetime | None = None,
+) -> bool:
+    """Append a raw.tickers version if content changed. Returns True if appended.
+
+    yfinance `.info` is fetched only on first sighting of a ticker; later
+    runs reuse the latest stored API fields and refresh only the
+    universe-derived fields (groups, benchmark). Comparison happens in
+    Python so list-typed `groups` compares plainly.
+    """
+    loaded_at = loaded_at or _utcnow()
     groups = universe.groups_for(ticker)
     benchmark = universe.benchmark_for(ticker)
 
-    existing = conn.execute("SELECT 1 FROM tickers WHERE ticker = ?", [ticker]).fetchone()
-    if existing is None:
+    latest = conn.execute(
+        """
+        SELECT name, sector, industry, asset_type, groups, benchmark
+        FROM raw.tickers
+        WHERE ticker = ?
+        ORDER BY _loaded_at DESC
+        LIMIT 1
+        """,
+        [ticker],
+    ).fetchone()
+
+    if latest is None:
         info = fetcher.fetch_info(ticker)
-        conn.execute(
-            """
-            INSERT INTO tickers (ticker, name, sector, industry, asset_type, groups, benchmark)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                ticker,
-                info.get("longName") or info.get("shortName"),
-                info.get("sector"),
-                info.get("industry"),
-                _classify_asset(info),
-                groups,
-                benchmark,
-            ],
+        candidate = (
+            info.get("longName") or info.get("shortName"),
+            info.get("sector"),
+            info.get("industry"),
+            _classify_asset(info),
+            groups,
+            benchmark,
         )
     else:
-        conn.execute(
-            """
-            UPDATE tickers
-            SET groups = ?, benchmark = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE ticker = ?
-            """,
-            [groups, benchmark, ticker],
-        )
+        # Reuse stored API fields; only universe-derived fields can drift.
+        candidate = (latest[0], latest[1], latest[2], latest[3], groups, benchmark)
+        if (list(latest[4] or []), latest[5]) == (groups, benchmark):
+            return False
+
+    conn.execute(
+        """
+        INSERT INTO raw.tickers
+            (ticker, name, sector, industry, asset_type, groups, benchmark,
+             _source, _loaded_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [ticker, *candidate, source, loaded_at],
+    )
+    return True
 
 
 def _classify_asset(info: dict[str, Any]) -> str:
@@ -232,47 +297,49 @@ def _classify_asset(info: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Run audit log.
+# Load audit log.
 # ---------------------------------------------------------------------------
-def start_run(
+def start_load(
     conn: duckdb.DuckDBPyConnection,
     *,
-    kind: str,
+    mode: str,
     universe_size: int,
     metadata: dict[str, Any],
 ) -> str:
-    """Insert a runs row in 'running' state. Returns the run_id."""
-    run_id = str(uuid.uuid4())
+    """Insert a raw.load_log row in 'running' state. Returns the load_id."""
+    load_id = str(uuid.uuid4())
     conn.execute(
         """
-        INSERT INTO runs (run_id, kind, started_at, status, universe_size, metadata)
-        VALUES (?, ?, CURRENT_TIMESTAMP, 'running', ?, ?::JSON)
+        INSERT INTO raw.load_log (load_id, mode, started_at, status, universe_size, metadata)
+        VALUES (?, ?, ?, 'running', ?, ?::JSON)
         """,
-        [run_id, kind, universe_size, json.dumps(metadata)],
+        [load_id, mode, _utcnow(), universe_size, json.dumps(metadata)],
     )
-    return run_id
+    return load_id
 
 
-def finish_run(
+def finish_load(
     conn: duckdb.DuckDBPyConnection,
     *,
-    run_id: str,
+    load_id: str,
     status: str,
-    rows_written: int = 0,
-    rows_skipped: int = 0,
+    rows_appended: int = 0,
+    rows_unchanged: int = 0,
+    tickers_failed: int = 0,
     error_message: str | None = None,
 ) -> None:
     conn.execute(
         """
-        UPDATE runs SET
-            finished_at = CURRENT_TIMESTAMP,
+        UPDATE raw.load_log SET
+            finished_at = ?,
             status = ?,
-            rows_written = ?,
-            rows_skipped = ?,
+            rows_appended = ?,
+            rows_unchanged = ?,
+            tickers_failed = ?,
             error_message = ?
-        WHERE run_id = ?
+        WHERE load_id = ?
         """,
-        [status, rows_written, rows_skipped, error_message, run_id],
+        [_utcnow(), status, rows_appended, rows_unchanged, tickers_failed, error_message, load_id],
     )
 
 
@@ -295,7 +362,7 @@ def fetch_with_retries(
             last_err = e
             wait = settings.retries.backoff_seconds * (2 ** (attempt - 1))
             logger.warning(
-                "ingest_fetch_retry",
+                "load_fetch_retry",
                 ticker=ticker,
                 attempt=attempt,
                 error=str(e),
@@ -308,8 +375,10 @@ def fetch_with_retries(
 
 
 def latest_date_for(conn: duckdb.DuckDBPyConnection, ticker: str) -> date | None:
-    """Most recent stored date for a ticker, or None if never seen."""
-    row = conn.execute("SELECT MAX(date) FROM prices WHERE ticker = ?", [ticker]).fetchone()
+    """Most recent loaded date for a ticker (any version), or None if never seen."""
+    row = conn.execute(
+        "SELECT MAX(date) FROM raw.prices WHERE ticker = ?", [ticker]
+    ).fetchone()
     if row is None or row[0] is None:
         return None
     val = row[0]
@@ -319,7 +388,7 @@ def latest_date_for(conn: duckdb.DuckDBPyConnection, ticker: str) -> date | None
 # ---------------------------------------------------------------------------
 # Per-ticker orchestration.
 # ---------------------------------------------------------------------------
-def ingest_ticker(
+def load_ticker(
     conn: duckdb.DuckDBPyConnection,
     ticker: str,
     *,
@@ -328,22 +397,20 @@ def ingest_ticker(
     universe: Universe,
     fetcher: YFinanceFetcher,
     settings: IngestSettings,
-) -> int:
-    """Ingest one ticker for [start, end] inclusive. Returns rows written."""
+    loaded_at: datetime,
+) -> tuple[int, int]:
+    """Extract+load one ticker for [start, end] inclusive. Returns (appended, unchanged)."""
     log = logger.bind(ticker=ticker, start=start.isoformat(), end=end.isoformat())
-    raw = fetch_with_retries(fetcher, ticker, start, end, settings)
-    if raw.empty:
-        log.warning("ingest_empty_response")
-        ensure_ticker_metadata(conn, ticker, universe, fetcher)
-        return 0
-    df = normalize_history(raw, ticker)
-    if df.empty:
-        log.warning("ingest_normalize_empty")
-        return 0
-    written = upsert_prices(conn, df)
-    ensure_ticker_metadata(conn, ticker, universe, fetcher)
-    log.info("ingest_ticker_complete", rows=written)
-    return written
+    raw_df = fetch_with_retries(fetcher, ticker, start, end, settings)
+    if raw_df.empty:
+        log.warning("load_empty_response")
+        sync_ticker_metadata(conn, ticker, universe, fetcher, loaded_at=loaded_at)
+        return (0, 0)
+    df = normalize_history(raw_df, ticker)
+    appended, unchanged = append_prices(conn, df, loaded_at=loaded_at)
+    sync_ticker_metadata(conn, ticker, universe, fetcher, loaded_at=loaded_at)
+    log.info("load_ticker_complete", appended=appended, unchanged=unchanged)
+    return (appended, unchanged)
 
 
 # ---------------------------------------------------------------------------
@@ -359,28 +426,30 @@ def run_ingest(
     fetcher: YFinanceFetcher | None = None,
     today: date | None = None,
 ) -> dict[str, Any]:
-    """Run an ingest pass over the full universe.
+    """Run an extract/load pass over the full universe.
 
-    Exactly one of `since` (backfill from this date) or `daily=True` (incremental
-    from the latest stored date per ticker) must be given.
+    Exactly one of `since` (backfill from this date) or `daily=True`
+    (incremental from the latest loaded date per ticker) must be given.
     """
     if (since is None) == (not daily):
         raise ValueError("provide exactly one of: since=<date>, daily=True")
 
     fetcher = fetcher or DefaultYFinanceFetcher()
     today = today or datetime.now(tz=UTC).date()
+    loaded_at = _utcnow()
     tickers = universe.all_tickers
+    mode = "daily" if daily else "backfill"
 
     metadata: dict[str, Any] = {
         "since": since.isoformat() if since else None,
-        "daily": daily,
         "today": today.isoformat(),
         "tickers": tickers,
     }
-    run_id = start_run(conn, kind="ingest", universe_size=len(tickers), metadata=metadata)
-    log = logger.bind(run_id=run_id)
+    load_id = start_load(conn, mode=mode, universe_size=len(tickers), metadata=metadata)
+    log = logger.bind(load_id=load_id, mode=mode)
 
-    total_rows = 0
+    appended_total = 0
+    unchanged_total = 0
     skipped = 0
     failures: list[tuple[str, str]] = []
     status = "success"
@@ -396,7 +465,7 @@ def run_ingest(
                 )
                 if start_date > today:
                     log.info(
-                        "ingest_ticker_up_to_date",
+                        "load_ticker_up_to_date",
                         ticker=ticker,
                         last=last.isoformat() if last else None,
                     )
@@ -407,7 +476,7 @@ def run_ingest(
                 start_date = since
 
             try:
-                rows = ingest_ticker(
+                appended, unchanged = load_ticker(
                     conn=conn,
                     ticker=ticker,
                     start=start_date,
@@ -415,35 +484,149 @@ def run_ingest(
                     universe=universe,
                     fetcher=fetcher,
                     settings=settings,
+                    loaded_at=loaded_at,
                 )
-                total_rows += rows
+                appended_total += appended
+                unchanged_total += unchanged
             except Exception as e:
-                log.error("ingest_ticker_failed", ticker=ticker, error=str(e))
+                log.error("load_ticker_failed", ticker=ticker, error=str(e))
                 failures.append((ticker, str(e)))
 
         if failures:
             status = "partial"
-        finish_run(
+        finish_load(
             conn,
-            run_id=run_id,
+            load_id=load_id,
             status=status,
-            rows_written=total_rows,
-            rows_skipped=skipped,
+            rows_appended=appended_total,
+            rows_unchanged=unchanged_total,
+            tickers_failed=len(failures),
             error_message="; ".join(f"{t}: {e}" for t, e in failures) or None,
         )
     except Exception as e:
-        finish_run(conn, run_id=run_id, status="error", error_message=str(e))
+        finish_load(conn, load_id=load_id, status="error", error_message=str(e))
         raise
 
     summary: dict[str, Any] = {
-        "run_id": run_id,
+        "load_id": load_id,
+        "mode": mode,
         "status": status,
         "tickers_total": len(tickers),
         "tickers_processed": len(tickers) - len(failures) - skipped,
         "tickers_skipped": skipped,
         "tickers_failed": len(failures),
-        "rows_written": total_rows,
+        "rows_appended": appended_total,
+        "rows_unchanged": unchanged_total,
         "failures": failures,
     }
-    log.info("ingest_run_complete", **summary)
+    log.info("load_run_complete", **summary)
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# One-time legacy migration (pre-ELT schema -> raw).
+# ---------------------------------------------------------------------------
+def migrate_legacy(conn: duckdb.DuckDBPyConnection) -> dict[str, Any]:
+    """Copy the pre-ELT main.prices / main.tickers into raw, then drop legacy tables.
+
+    - Preserves original load timestamps (`ingested_at` -> `_loaded_at`) and
+      provenance (`data_source` -> `_source`). Legacy rows were pre-cleaned
+      by the v1 pipeline (NaN rows dropped, 0.0 splits mapped to 1.0), which
+      is fine — staging's cleaning is a no-op on already-clean rows.
+    - Idempotent: the copy anti-joins on the full identity including
+      `_loaded_at`, so re-running never duplicates.
+    - Legacy tables (prices, tickers, signals, runs) are dropped only after
+      a parity check confirms every legacy row landed in raw.
+    - No-op with status 'no_legacy' when the legacy tables are absent
+      (i.e. any fresh clone).
+    """
+    main_tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+        ).fetchall()
+    }
+    if "prices" not in main_tables:
+        return {"status": "no_legacy", "prices_migrated": 0, "tickers_migrated": 0}
+
+    load_id = start_load(
+        conn, mode="migration", universe_size=0, metadata={"legacy_tables": sorted(main_tables)}
+    )
+
+    prices_migrated = len(
+        conn.execute(
+            """
+            INSERT INTO raw.prices
+                (date, ticker, open, high, low, close, adj_close, volume,
+                 dividend, split_ratio, _source, _loaded_at)
+            SELECT m.date, m.ticker, m.open, m.high, m.low, m.close, m.adj_close,
+                   m.volume, m.dividend, m.split_ratio, m.data_source, m.ingested_at
+            FROM main.prices m
+            WHERE NOT EXISTS (
+                SELECT 1 FROM raw.prices r
+                WHERE r.date = m.date AND r.ticker = m.ticker
+                  AND r._source = m.data_source AND r._loaded_at = m.ingested_at
+            )
+            RETURNING 1
+            """
+        ).fetchall()
+    )
+
+    tickers_migrated = 0
+    if "tickers" in main_tables:
+        tickers_migrated = len(
+            conn.execute(
+                """
+                INSERT INTO raw.tickers
+                    (ticker, name, sector, industry, asset_type, groups, benchmark,
+                     _source, _loaded_at)
+                SELECT m.ticker, m.name, m.sector, m.industry, m.asset_type,
+                       m.groups, m.benchmark, 'yfinance', m.updated_at
+                FROM main.tickers m
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM raw.tickers r
+                    WHERE r.ticker = m.ticker AND r._loaded_at = m.updated_at
+                )
+                RETURNING 1
+                """
+            ).fetchall()
+        )
+
+    # Parity: every legacy price row must exist in raw before we drop anything.
+    missing = conn.execute(
+        """
+        SELECT COUNT(*) FROM main.prices m
+        WHERE NOT EXISTS (
+            SELECT 1 FROM raw.prices r
+            WHERE r.date = m.date AND r.ticker = m.ticker
+              AND r._source = m.data_source AND r._loaded_at = m.ingested_at
+        )
+        """
+    ).fetchone()
+    if missing is None or missing[0] != 0:
+        finish_load(
+            conn,
+            load_id=load_id,
+            status="error",
+            error_message=f"parity check failed: {missing[0] if missing else '?'} rows missing",
+        )
+        raise RuntimeError("legacy migration parity check failed; legacy tables NOT dropped")
+
+    dropped = [t for t in LEGACY_TABLES if t in main_tables]
+    for table in dropped:
+        conn.execute(f"DROP TABLE main.{table}")
+
+    finish_load(
+        conn,
+        load_id=load_id,
+        status="success",
+        rows_appended=prices_migrated + tickers_migrated,
+    )
+    summary = {
+        "status": "success",
+        "prices_migrated": prices_migrated,
+        "tickers_migrated": tickers_migrated,
+        "legacy_tables_dropped": dropped,
+    }
+    logger.info("legacy_migration_complete", **summary)
     return summary

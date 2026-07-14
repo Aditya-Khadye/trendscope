@@ -1,77 +1,68 @@
--- Trendscope DuckDB schema.
+-- Trendscope raw layer (extract/load target).
 --
--- Storage timestamps are UTC; the display layer converts to ET.
--- Each table has a stable PK so re-ingesting the same date is idempotent
--- (INSERT OR REPLACE / ON CONFLICT DO UPDATE).
+-- Design rules:
+--   * Append-only: no UPDATE or DELETE, ever. Restated upstream data
+--     (e.g. adj_close shifting after a dividend) appends a NEW VERSION of
+--     the row; downstream dbt staging resolves latest-wins per key.
+--   * Every row carries `_source` (provenance) and `_loaded_at` (UTC).
+--   * No primary keys on raw tables — multiple versions per natural key
+--     are the point. Uniqueness is enforced downstream by dbt tests.
+--   * Raw preserves upstream quirks (yfinance's 0.0 = "no split", NaN
+--     rows at series edges). Cleaning is a staging concern.
+--
+-- Transform tables (staging/marts) are owned by dbt, not this file.
+
+CREATE SCHEMA IF NOT EXISTS raw;
 
 -- ---------------------------------------------------------------------------
--- prices: one row per (ticker, trading day).
+-- raw.prices: versioned daily OHLCV. One row per (date, ticker, _source,
+-- _loaded_at); the latest _loaded_at per (date, ticker) is the current view.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS prices (
+CREATE TABLE IF NOT EXISTS raw.prices (
     date         DATE        NOT NULL,
     ticker       VARCHAR     NOT NULL,
     open         DOUBLE,
     high         DOUBLE,
     low          DOUBLE,
     close        DOUBLE,
-    adj_close    DOUBLE,                   -- split- and dividend-adjusted
+    adj_close    DOUBLE,
     volume       BIGINT,
-    dividend     DOUBLE      DEFAULT 0.0,  -- cash dividend paid that day
-    split_ratio  DOUBLE      DEFAULT 1.0,  -- ratio if a split occurred (1.0 = none)
-    data_source  VARCHAR     NOT NULL DEFAULT 'yfinance',
-    ingested_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (date, ticker)
+    dividend     DOUBLE,
+    split_ratio  DOUBLE,                    -- yfinance convention: 0.0 = no split
+    _source      VARCHAR     NOT NULL,
+    _loaded_at   TIMESTAMP   NOT NULL       -- UTC, set by the loader
 );
 
-CREATE INDEX IF NOT EXISTS idx_prices_ticker_date ON prices(ticker, date);
-
 -- ---------------------------------------------------------------------------
--- tickers: metadata about each instrument we track.
--- Populated/refreshed by ingest from universe.yaml + yfinance .info.
+-- raw.tickers: versioned instrument metadata. A new version is appended only
+-- when content changes (first sighting, group/benchmark edit, info refresh).
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS tickers (
-    ticker       VARCHAR     PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS raw.tickers (
+    ticker       VARCHAR     NOT NULL,
     name         VARCHAR,
     sector       VARCHAR,
     industry     VARCHAR,
-    asset_type   VARCHAR,                  -- 'stock' | 'etf' | 'index'
-    groups       VARCHAR[],                -- e.g. ['mega_cap', 'holdings']
-    benchmark    VARCHAR,                  -- sector ETF for relative strength
-    added_at     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at   TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+    asset_type   VARCHAR,                   -- 'stock' | 'etf' | 'index' | ...
+    groups       VARCHAR[],                 -- universe group memberships
+    benchmark    VARCHAR,                   -- sector ETF for relative strength
+    _source      VARCHAR     NOT NULL,
+    _loaded_at   TIMESTAMP   NOT NULL       -- UTC, set by the loader
 );
 
 -- ---------------------------------------------------------------------------
--- signals: long-form output of every signal function.
--- One row per (date, ticker, signal_name). Phase 2 writes here.
+-- raw.load_log: audit log for the Python extract/load step only.
+-- Transform observability lives in Airflow task logs + dbt artifacts.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS signals (
-    date         DATE        NOT NULL,
-    ticker       VARCHAR     NOT NULL,
-    signal_name  VARCHAR     NOT NULL,
-    value        DOUBLE,                   -- numeric output (z-score, pct, raw)
-    payload      JSON,                     -- optional structured detail (e.g. {"fast": 50, "slow": 200})
-    computed_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (date, ticker, signal_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_signals_name_date ON signals(signal_name, date);
-
--- ---------------------------------------------------------------------------
--- runs: audit log for every CLI invocation that mutates data.
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS runs (
-    run_id          VARCHAR     PRIMARY KEY,           -- UUIDv4
-    kind            VARCHAR     NOT NULL,              -- 'ingest' | 'signals' | 'digest'
-    started_at      TIMESTAMP   NOT NULL,
-    finished_at     TIMESTAMP,
-    status          VARCHAR     NOT NULL,              -- 'running' | 'success' | 'partial' | 'error'
-    universe_size   INTEGER,                           -- tickers in scope for this run
-    rows_written    INTEGER,                           -- new or replaced rows
-    rows_skipped    INTEGER,                           -- already-present rows
+CREATE TABLE IF NOT EXISTS raw.load_log (
+    load_id         VARCHAR     PRIMARY KEY,        -- UUIDv4
+    mode            VARCHAR     NOT NULL,           -- 'backfill' | 'daily' | 'migration'
+    started_at      TIMESTAMP   NOT NULL,           -- UTC
+    finished_at     TIMESTAMP,                      -- UTC
+    status          VARCHAR     NOT NULL,           -- 'running' | 'success' | 'partial' | 'error'
+    universe_size   INTEGER,
+    rows_appended   INTEGER,                        -- new version rows written
+    rows_unchanged  INTEGER,                        -- fetched but identical to latest version
+    tickers_failed  INTEGER,
     error_message   VARCHAR,
-    metadata        JSON                               -- run-specific context (date range, args, etc.)
+    metadata        JSON
 );
-
-CREATE INDEX IF NOT EXISTS idx_runs_started ON runs(started_at);
-CREATE INDEX IF NOT EXISTS idx_runs_kind_started ON runs(kind, started_at);
