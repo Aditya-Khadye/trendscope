@@ -105,15 +105,31 @@ def signals() -> None:
 
 
 @app.command()
-def digest() -> None:
-    """Render the daily LLM-narrated markdown digest. (Phase 3.)"""
-    raise NotImplementedError("digest is Phase 3")
+def digest(
+    date_str: str | None = typer.Option(
+        None, "--date", help="YYYY-MM-DD; defaults to the latest available signal date."
+    ),
+    no_llm: bool = typer.Option(
+        False, "--no-llm", help="Skip the LLM narrative even if an API key is configured."
+    ),
+) -> None:
+    """Render the daily markdown digest from the signal marts (+ optional LLM narrative)."""
+    _bootstrap_logging()
+    from trendscope.digest.pipeline import run_digest
+
+    path = run_digest(
+        use_llm=False if no_llm else None,
+        as_of=date.fromisoformat(date_str) if date_str else None,
+    )
+    typer.echo(path.read_text())
+    typer.echo(f"[written] {path}")
 
 
 @app.command()
 def daily() -> None:
-    """Run ingest + signals + digest end-to-end."""
-    raise NotImplementedError("daily wires up once signals and digest exist")
+    """Run ingest + signals + digest end-to-end (use `make daily` or the Airflow DAG)."""
+    typer.echo("Use `make daily` locally, or the trendscope_daily Airflow DAG.")
+    raise typer.Exit(code=2)
 
 
 if __name__ == "__main__":

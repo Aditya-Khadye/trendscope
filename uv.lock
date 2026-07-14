@@ -1810,8 +1810,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "dbt-core" },
-    { name = "dbt-duckdb" },
     { name = "duckdb" },
     { name = "numpy" },
     { name = "pandas" },
@@ -1826,6 +1824,8 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "dbt-core" },
+    { name = "dbt-duckdb" },
     { name = "freezegun" },
     { name = "mypy" },
     { name = "pandas-stubs" },
@@ -1839,8 +1839,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0" },
-    { name = "dbt-core", specifier = ">=1.9,<2.0" },
-    { name = "dbt-duckdb", specifier = ">=1.9,<2.0" },
     { name = "duckdb", specifier = ">=1.0.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", specifier = ">=2.2" },
@@ -1855,6 +1853,8 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "dbt-core", specifier = ">=1.9,<2.0" },
+    { name = "dbt-duckdb", specifier = ">=1.9,<2.0" },
     { name = "freezegun", specifier = ">=1.5" },
     { name = "mypy", specifier = ">=1.10" },
     { name = "pandas-stubs", specifier = ">=2.2" },

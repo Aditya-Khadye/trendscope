@@ -1,10 +1,13 @@
 """Application settings.
 
 YAML at config/settings.yaml is the base. Env vars (and .env) override it.
-Resolution order: kwargs > env > .env > YAML.
+Resolution order: kwargs > env > .env > YAML. The YAML location itself can
+be moved with TRENDSCOPE_SETTINGS_PATH (used by the Airflow image, where
+the package is site-installed and the repo layout doesn't exist).
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -21,6 +24,12 @@ from pydantic_settings import (
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 DEFAULT_SETTINGS_YAML: Path = PROJECT_ROOT / "config" / "settings.yaml"
 DEFAULT_ENV_FILE: Path = PROJECT_ROOT / ".env"
+
+
+def _settings_yaml_path() -> Path:
+    """settings.yaml location; TRENDSCOPE_SETTINGS_PATH overrides the default."""
+    override = os.environ.get("TRENDSCOPE_SETTINGS_PATH")
+    return Path(override) if override else DEFAULT_SETTINGS_YAML
 
 
 class PathsSettings(BaseModel):
@@ -59,7 +68,10 @@ class IngestSettings(BaseModel):
 
 
 class DigestFiltersSettings(BaseModel):
-    min_signal_strength: float = 1.5
+    zscore_threshold: float = 1.5
+    momentum_rank_extreme: float = 0.9
+    vol_percentile_threshold: float = 0.9
+    rel_return_threshold: float = 0.05
     max_tickers_per_digest: int = 15
 
 
@@ -127,7 +139,7 @@ class Settings(BaseSettings):
             init_settings,
             env_settings,
             dotenv_settings,
-            YamlConfigSettingsSource(settings_cls),
+            YamlConfigSettingsSource(settings_cls, yaml_file=_settings_yaml_path()),
             file_secret_settings,
         )
 

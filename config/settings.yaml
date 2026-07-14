@@ -20,10 +20,13 @@ ingest:
 # Signal parameters live in dbt/dbt_project.yml `vars` — dbt owns all
 # transformations. This file configures only the Python EL + digest layers.
 
-# Phase 3 digest parameters.
+# Digest parameters: which tickers count as "interesting today".
 digest:
   filters:
-    min_signal_strength: 1.5     # in z-score / percentile terms
+    zscore_threshold: 1.5           # flag |zscore| >= this
+    momentum_rank_extreme: 0.9      # flag rank >= this or <= (1 - this)
+    vol_percentile_threshold: 0.9   # flag vol regime above this percentile
+    rel_return_threshold: 0.05      # flag |relative_return_21d| >= this
     max_tickers_per_digest: 15
   llm:
     model: "claude-sonnet-4-6"

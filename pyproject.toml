@@ -7,10 +7,12 @@ requires-python = ">=3.12"
 authors = [{ name = "Aditya Khadye" }]
 license = { text = "MIT" }
 
+# NB: dbt lives in the dev group, not here — trendscope's Python code never
+# imports dbt (it shells out), and keeping it out of runtime deps lets the
+# Airflow image isolate dbt in its own venv (dbt-core doesn't yet support
+# the Python 3.14 that Astro Runtime ships).
 dependencies = [
     "anthropic>=0.40.0",
-    "dbt-core>=1.9,<2.0",
-    "dbt-duckdb>=1.9,<2.0",
     "duckdb>=1.0.0",
     "numpy>=1.26",
     "pandas>=2.2",
@@ -33,6 +35,8 @@ trendscope = "trendscope.cli:app"
 
 [dependency-groups]
 dev = [
+    "dbt-core>=1.9,<2.0",
+    "dbt-duckdb>=1.9,<2.0",
     "freezegun>=1.5",
     "mypy>=1.10",
     "pandas-stubs>=2.2",
